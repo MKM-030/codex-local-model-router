@@ -14,7 +14,7 @@ param(
     [switch]$SkipAutostart,
     [switch]$AllowCloudSearch,
     [string]$SearchModel = "",
-    [string]$SourceRef = "v0.2.0"
+    [string]$SourceRef = "v0.2.1"
 )
 
 Set-StrictMode -Version Latest
@@ -307,7 +307,7 @@ Set shell = Nothing
     Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList ('"' + $startupVbs + '"')
     Start-Sleep -Milliseconds 800
     $health = Invoke-RestMethod -Uri ("http://127.0.0.1:$RouterPort/health") -TimeoutSec 5
-    if ($health.version -ne "0.2.0") { throw "Unexpected router version on target port." }
+    if ($health.version -ne "0.2.1") { throw "Unexpected router version on target port." }
 }
 
 $cache = Join-Path $CodexHome "models_cache.json"

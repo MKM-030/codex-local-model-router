@@ -14,7 +14,7 @@ $StatePath = Join-Path $InstallDir "install-state.json"
 if (-not (Test-Path $StatePath)) {
     throw "Install state not found at $StatePath. Refusing to guess previous config values."
 }
-$state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+$state = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $configText = [IO.File]::ReadAllText($ConfigPath)
 $backup = "$ConfigPath.backup-before-local-model-uninstall-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 Copy-Item -LiteralPath $ConfigPath -Destination $backup -Force

@@ -2,7 +2,7 @@
   "models": [
     {
       "slug": "Qwen3.8-Flash-Next",
-      "display_name": "Qwen3.8 Flash Next — Local",
+      "display_name": "Qwen3.8 Flash Next - Local",
       "description": "Local Qwen3.8 Flash Next served by Strix Alloy llama-server.",
       "default_reasoning_level": "low",
       "supported_reasoning_levels": [

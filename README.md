@@ -2,6 +2,18 @@
 
 **Unofficial Windows compatibility bridge for local Responses-API models in the Codex/ChatGPT Desktop Work model picker.** This is not a replacement for the hosted ChatGPT service and does not grant access to additional tools, accounts, or plans.
 
+## Version 0.2.1: Windows display-name fix
+
+Windows PowerShell 5.1 could read a BOM-less UTF-8 catalog as the system ANSI codepage, corrupting Unicode display names on update. All PowerShell JSON reads now explicitly use UTF-8. Existing Unicode names and paths are preserved, including through repeated updates.
+
+For a name that has already been corrupted, the updater accepts an explicit repair value:
+
+```powershell
+.\Update-CodexToolBridge.ps1 -ModelId "Qwen3.8-Flash-Next" -DisplayName "Qwen3.8 Flash Next - Local"
+```
+
+The display override changes only the matching model's `display_name`, not its routing ID. Other custom model names are left unchanged. The ordinary updater still refreshes bridge metadata and restarts its router unless `-NoStart` is passed; finish active tasks first. Reopen the model menu after Codex refreshes its catalog, or restart the app once idle if it still shows the cached name.
+
 ## Version 0.2: tool compatibility and fail-closed routing
 
 The router keeps one Codex provider while selecting the actual inference endpoint by model ID. Local inference requests are translated; cloud inference requests retain their original tool protocol.
@@ -81,7 +93,7 @@ To fetch the installer without cloning, download the release script, inspect it,
 
 ```powershell
 $installer = Join-Path $env:TEMP "Install-CodexLocalModel.ps1"
-Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/MKM-030/codex-local-model-router/v0.2.0/Install-CodexLocalModel.ps1" -OutFile $installer
+Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/MKM-030/codex-local-model-router/v0.2.1/Install-CodexLocalModel.ps1" -OutFile $installer
 # Inspect the downloaded script before executing it.
 & $installer
 ```

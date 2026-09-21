@@ -122,3 +122,12 @@ v0.1 could mistake a compressed request for an unrecognized body and send it to 
 Standalone search is different: it is a cloud service. Its request must use the separately configured, authorized `searchModel`, not the local Qwen model ID. This mapping applies only to the search endpoint; normal local inference stays local. Cloud account eligibility is still enforced by the service.
 
 If the error persists after upgrading, check the metadata log's `path`, `route`, `model` and `errorCode`. Also confirm that an old thread selects `hybrid_router`, not the built-in cloud provider. Restart Codex Desktop after active work has finished to reload feature/tool metadata. Do not delete a thread's history or edit its database as a troubleshooting shortcut.
+
+
+## Garbled model name after a Windows update (v0.2.0)
+
+The model may still work while the label contains encoding artifacts instead of a dash. v0.2.0 used PowerShell JSON reads without an explicit encoding. Windows PowerShell 5.1 interprets BOM-less files using the ANSI codepage, so reading UTF-8 and saving it again can persist a damaged label.
+
+Use the v0.2.1 updater. It preserves valid Unicode metadata. For labels already damaged, explicitly set `-DisplayName` together with `-ModelId` as shown in the README. Do not rename the model ID: it is the routing key. A plain ASCII hyphen in the display name avoids legacy codepage ambiguity.
+
+The menu may retain an in-memory copy until its catalog refreshes. Close/reopen the picker, or restart Codex Desktop after active work is finished. There is no need to reload the model weights for a display-name repair.

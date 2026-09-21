@@ -2,12 +2,13 @@
 param(
     [string]$CodexHome = $(if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }),
     [string]$ModelId = 'Qwen3.8-Flash-Next',
+    [string]$DisplayName = '',
     [string]$LocalBaseUrl = 'http://127.0.0.1:8826/v1',
     [int]$RouterPort = 8831,
     [switch]$AllowCloudSearch,
     [string]$SearchModel = '',
     [switch]$NoStart,
-    [string]$SourceRef = 'v0.2.0'
+    [string]$SourceRef = 'v0.2.1'
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -51,7 +52,7 @@ Copy-SourceFile 'router/hybrid-model-router.py' $RouterScript
 Copy-SourceFile 'router/tool_bridge.py' (Join-Path $InstallDir 'tool_bridge.py')
 Copy-SourceFile 'scripts/configure_tool_bridge.py' (Join-Path $InstallDir 'scripts\configure_tool_bridge.py')
 if (Test-Path -LiteralPath $RouterConfigPath) {
-    $settings = Get-Content -LiteralPath $RouterConfigPath -Raw | ConvertFrom-Json
+    $settings = Get-Content -LiteralPath $RouterConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 } else {
     $legacyCatalog = Join-Path $CodexHome 'qwen-flash-next-models.json'
     if (-not (Test-Path -LiteralPath $legacyCatalog)) { throw 'Legacy model catalog missing.' }
@@ -59,6 +60,9 @@ if (Test-Path -LiteralPath $RouterConfigPath) {
         host = '127.0.0.1'; port = $RouterPort; cloudBase = 'https://chatgpt.com/backend-api/codex'
         models = @([pscustomobject]@{id=$ModelId; baseUrl=$LocalBaseUrl; catalogPath=$legacyCatalog})
     }
+}
+if (-not [string]::IsNullOrWhiteSpace($DisplayName) -and -not @($settings.models | Where-Object { $_.id -eq $ModelId }).Count) {
+    throw 'No configured model matches -ModelId; refusing display-name repair.'
 }
 $settings | Add-Member -NotePropertyName logMetadata -NotePropertyValue $true -Force
 if ($AllowCloudSearch) {
@@ -69,8 +73,12 @@ foreach ($m in $settings.models) {
     $catalogPath = [string]$m.catalogPath
     if (-not [IO.Path]::IsPathRooted($catalogPath)) { $catalogPath = Join-Path $InstallDir $catalogPath }
     Copy-Item -LiteralPath $catalogPath -Destination (Join-Path $Backup ([IO.Path]::GetFileName($catalogPath))) -Force
-    $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
+    $catalog = Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($entry in $catalog.models) {
+        # Explicit repair only; preserve every other model and user-defined label.
+        if (-not [string]::IsNullOrWhiteSpace($DisplayName) -and $entry.slug -eq $ModelId) {
+            $entry | Add-Member -NotePropertyName display_name -NotePropertyValue $DisplayName -Force
+        }
         foreach ($key in @('include_skills_usage_instructions','include_plugin_usage_instructions','include_apps_usage_instructions')) {
             $entry | Add-Member -NotePropertyName $key -NotePropertyValue $true -Force
         }
@@ -106,7 +114,7 @@ if (-not $NoStart) {
         try { $health=Invoke-RestMethod -Uri ('http://127.0.0.1:' + $settings.port + '/health') -TimeoutSec 1; break }
         catch { Start-Sleep -Milliseconds 250 }
     }
-    if (-not $health -or $health.version -ne '0.2.0') { throw 'The new router failed its health check; backup preserved.' }
+    if (-not $health -or $health.version -ne '0.2.1') { throw 'The new router failed its health check; backup preserved.' }
     Write-Host ('Router running: v' + $health.version + ' PID ' + $health.pid)
 }
 Write-Host ('Backup: ' + $Backup)

@@ -68,7 +68,29 @@ def main():
                 (home / "config.toml").read_text(encoding="utf-8-sig")
             )
             assert config["features"]["standalone_web_search"] is True
-            run(ROOT / "Update-CodexToolBridge.ps1", "-NoStart")
+            # BOM-less UTF-8 must survive repeated PS 5.1 updates, including paths.
+            installed = home / "local-model-router"
+            catalog_path = installed / "catalog-\u00fc-\u6a21\u578b.json"
+            catalog = json.loads((installed / "local-model-catalog.json").read_text(encoding="utf-8-sig"))
+            unicode_label = "Qwen \u2014 Lokal \u00e4\u00f6\u00fc \u6a21\u578b \U0001f9e0"
+            catalog["models"][0]["display_name"] = unicode_label
+            catalog["models"][0]["description"] = "F\u00fcr lokale Modelle \u2013 unver\u00e4ndert"
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+            settings_path = installed / "router-config.json"
+            settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+            settings["models"][0]["catalogPath"] = catalog_path.name
+            settings_path.write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+            for _ in range(2):
+                run(ROOT / "Update-CodexToolBridge.ps1", "-NoStart")
+                self_catalog = json.loads(catalog_path.read_text(encoding="utf-8-sig"))
+                assert self_catalog["models"][0]["display_name"] == unicode_label, "Unicode model label corrupted"
+                assert self_catalog["models"][0]["description"] == catalog["models"][0]["description"]
+                assert json.loads(settings_path.read_text(encoding="utf-8-sig"))["models"][0]["catalogPath"] == catalog_path.name
+            run(ROOT / "Update-CodexToolBridge.ps1", "-NoStart", "-DisplayName", "Qwen3.8 Flash Next - Local")
+            repaired = json.loads(catalog_path.read_text(encoding="utf-8-sig"))
+            assert repaired["models"][0]["display_name"] == "Qwen3.8 Flash Next - Local"
+            repaired["models"][0]["display_name"] = unicode_label
+            assert repaired == self_catalog, "Display repair changed unrelated metadata"
             for rel in [
                 "tool_bridge.py",
                 "hybrid-model-router.py",
@@ -81,7 +103,7 @@ def main():
             )
             assert final == tomllib.loads(original), (final, tomllib.loads(original))
             print(
-                "PASS: INSTALL, REINSTALL, UPDATE, UNINSTALL; ORIGINAL CONFIG RESTORED"
+                "PASS: INSTALL, REINSTALL, UTF8 UPDATES, DISPLAY REPAIR, UNINSTALL; ORIGINAL CONFIG RESTORED"
             )
     finally:
         server.shutdown()

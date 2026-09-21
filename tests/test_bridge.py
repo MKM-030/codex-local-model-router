@@ -485,7 +485,7 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(r.status_code, 503)
 
     def test_health(self):
-        self.assertEqual(httpx.get(self.base + "/health").json()["version"], "0.2.0")
+        self.assertEqual(httpx.get(self.base + "/health").json()["version"], router.VERSION)
 
     def test_origin(self):
         r = httpx.post(

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - 2026-09-21
+
+- Explicitly read UTF-8 JSON in the Windows updater, uninstaller and diagnostics, fixing corrupted display names and non-ASCII catalog paths in Windows PowerShell 5.1.
+- Add optional `-DisplayName` repair to the updater, scoped to `-ModelId`, without changing model identity or routing.
+- Use the same ASCII Qwen example display name as the installer.
+- Add real PowerShell regressions for Unicode metadata with and without BOM, plus repeated-update, Unicode-path and display-repair lifecycle coverage.
+- No inference or tool-translation behavior changes.
+
 ## 0.2.0 — 2026-09-21
 
 - Translate namespaced function tools to stable, collision-checked local aliases and restore their original Codex identities.

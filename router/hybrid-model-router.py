@@ -1,4 +1,4 @@
-"""Loopback Codex router v0.2.0. Tools execute in Codex; routing is fail-closed."""
+"""Loopback Codex router v0.2.1. Tools execute in Codex; routing is fail-closed."""
 
 from __future__ import annotations
 import argparse, copy, gzip, io, ipaddress, json, logging, os, select, socket, threading, time, uuid, zlib
@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 from tool_bridge import BridgeError, ToolBridge, dumps
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 CLOUD_BASE = "https://chatgpt.com/backend-api/codex"
 MAX_BODY = 64 * 1024 * 1024
 HOP_HEADERS = {

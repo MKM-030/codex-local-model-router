@@ -46,7 +46,7 @@ if (-not (Test-Path $RouterConfigPath)) {
     Write-Host "[FAIL] router-config.json not found" -ForegroundColor Red
     exit 1
 }
-$routerConfig = Get-Content -LiteralPath $RouterConfigPath -Raw | ConvertFrom-Json
+$routerConfig = Get-Content -LiteralPath $RouterConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $routerHost = [string]$routerConfig.host
 $routerPort = [int]$routerConfig.port
 $model = $routerConfig.models | Select-Object -First 1
@@ -71,7 +71,7 @@ try {
 
 if (Test-Path $CachePath) {
     try {
-        $cache = Get-Content -LiteralPath $CachePath -Raw | ConvertFrom-Json
+        $cache = Get-Content -LiteralPath $CachePath -Raw -Encoding UTF8 | ConvertFrom-Json
         $found = $cache.models | Where-Object { $_.slug -eq $modelId }
         if ($found) {
             Write-Host "[ OK ] model is present in Codex model cache: $modelId"

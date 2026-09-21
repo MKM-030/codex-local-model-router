@@ -36,3 +36,8 @@ The reported user's existing thread was inspected read-only: it already selected
 A real Zstandard-compressed request to the deployed router returned HTTP 200 from Qwen3.8-Flash-Next with `BRIDGE_ZSTD_LOCAL_OK`. A separate real Codex request for GPT-6 Astra through the same router returned `BRIDGE_V02_CLOUD_OK` and exited successfully. `/ready` reported the local backend available on port 8826. These checks used the deployed v0.2.0 files, not mock inference.
 
 Reference documentation for the underlying contracts: [Codex configuration](https://developers.openai.com/codex/config-reference), [function calling](https://developers.openai.com/api/docs/guides/function-calling), and [skills](https://developers.openai.com/codex/skills). This project's compatibility logic and test results are independent observations, not an official OpenAI support guarantee.
+
+
+## v0.2.1 display-encoding regression
+
+50 automated tests passed on Windows PowerShell 5.1. Two new tests execute the actual JSON-read statements from the updater, uninstaller and diagnostics against Unicode payloads, with and without a UTF-8 BOM. Before the fix, all five BOM-less read sites failed; after explicit UTF-8 decoding, all passed. The installer lifecycle additionally preserves Unicode labels, descriptions and catalog filenames across two updates, applies an explicit display-name override, and restores the original TOML on uninstall. These are encoding/configuration checks, not new inference benchmarks.
