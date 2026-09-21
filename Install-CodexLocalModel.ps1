@@ -11,6 +11,7 @@ param(
     [string]$CodexHome = (Join-Path $HOME ".codex"),
     [switch]$RestartChatGPT,
     [switch]$RunInferenceProbe,
+    [switch]$CheckLocalServer,
     [switch]$SkipAutostart,
     [switch]$AllowCloudSearch,
     [string]$SearchModel = "",
@@ -27,6 +28,51 @@ $RouterScript = Join-Path $InstallDir "hybrid-model-router.py"
 $RouterConfigPath = Join-Path $InstallDir "router-config.json"
 $CatalogPath = Join-Path $InstallDir "local-model-catalog.json"
 $StatePath = Join-Path $InstallDir "install-state.json"
+
+# Validate configuration, not availability. A stopped model is a valid install state.
+function Assert-LocalEndpointSettings([string]$BaseUrl, [int]$ListenPort) {
+    [Uri]$endpoint = $null
+    if (-not [Uri]::TryCreate($BaseUrl, [UriKind]::Absolute, [ref]$endpoint) -or
+        $endpoint.Scheme -notin @('http', 'https') -or
+        -not $endpoint.IsLoopback -or
+        $endpoint.UserInfo -or $endpoint.Query -or $endpoint.Fragment) {
+        throw 'LocalBaseUrl must be an absolute loopback HTTP(S) URL without credentials, query or fragment.'
+    }
+    if ($ListenPort -lt 1 -or $ListenPort -gt 65535) {
+        throw 'RouterPort must be between 1 and 65535.'
+    }
+    if ($endpoint.Port -eq $ListenPort) {
+        throw 'RouterPort and the local model server port must be different.'
+    }
+}
+
+function Test-OptionalLocalEndpoint([string]$BaseUrl, [string]$ExpectedModelId) {
+    try {
+        $models = Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/models') -TimeoutSec 5 -ErrorAction Stop
+        if (-not $models -or -not ($models.PSObject.Properties.Name -contains 'data')) {
+            Write-Warning 'Installation succeeded; /models did not return a model list. Check the local API before using it.'
+            return $false
+        }
+        $matching = @($models.data | Where-Object {
+            $_ -and ($_.PSObject.Properties.Name -contains 'id') -and $_.id -eq $ExpectedModelId
+        })
+        if ($matching.Count -eq 0) {
+            Write-Warning "Installation succeeded; the server does not advertise model '$ExpectedModelId'. Check its model ID/alias before using it."
+            return $false
+        }
+        Write-Host "Local model endpoint available: $BaseUrl ($ExpectedModelId). Inference has not been tested."
+        return $true
+    } catch {
+        Write-Warning "Installation succeeded; the optional local-server check did not pass. The server may be stopped, loading, or require authentication. Start/check it later at $BaseUrl. No reinstall is needed. Details: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+Assert-LocalEndpointSettings $LocalBaseUrl $RouterPort
+if ([string]::IsNullOrWhiteSpace($ModelId) -or [string]::IsNullOrWhiteSpace($DisplayName)) {
+    throw 'ModelId and DisplayName must not be empty.'
+}
+if ($ContextWindow -le 0) { throw 'ContextWindow must be greater than zero.' }
 
 function Resolve-PythonExe {
     $python = Get-Command python -ErrorAction SilentlyContinue
@@ -126,12 +172,9 @@ if (-not [string]::IsNullOrWhiteSpace([string]$missing)) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to install router dependencies." }
 }
 
-try {
-    $null = Invoke-RestMethod -Uri ($LocalBaseUrl.TrimEnd("/") + "/models") -TimeoutSec 5
-    Write-Host "Local model endpoint reachable: $LocalBaseUrl"
-} catch {
-    throw "Local endpoint is not reachable at $LocalBaseUrl. Start it first. $($_.Exception.Message)"
-}
+# Installing the router does not require a running local inference server.
+# Do not probe the backend here: offline/loading/auth-protected endpoints are allowed.
+Write-Host "Local model endpoint configured: $LocalBaseUrl (no running model server required for installation)."
 
 function Install-RepoFile([string]$RelativePath, [string]$Destination) {
     $localRelative = $RelativePath -replace '/', '\'
@@ -305,26 +348,44 @@ Set shell = Nothing
         }
 
     Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList ('"' + $startupVbs + '"')
-    Start-Sleep -Milliseconds 800
-    $health = Invoke-RestMethod -Uri ("http://127.0.0.1:$RouterPort/health") -TimeoutSec 5
-    if ($health.version -ne "0.2.1") { throw "Unexpected router version on target port." }
+    $health = $null
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        try {
+            $health = Invoke-RestMethod -Uri ("http://127.0.0.1:$RouterPort/health") -TimeoutSec 1 -ErrorAction Stop
+            break
+        } catch { Start-Sleep -Milliseconds 250 }
+    }
+    if (-not $health -or $health.version -ne "0.2.1") {
+        throw 'Router startup failed or a different service occupies its port. This is not a model-server requirement; check the router and its port.'
+    }
 }
 
 $cache = Join-Path $CodexHome "models_cache.json"
 Remove-Item -LiteralPath $cache -Force -ErrorAction SilentlyContinue
 
+# These are optional post-install diagnostics. Failure never rolls back an install.
+$localEndpointAvailable = $false
+if ($CheckLocalServer -or $RunInferenceProbe) {
+    $localEndpointAvailable = Test-OptionalLocalEndpoint $LocalBaseUrl $ModelId
+}
 if ($RunInferenceProbe) {
-    $probe = @{
-        model = $ModelId
-        input = "Reply exactly LOCAL_MODEL_OK"
-        max_output_tokens = 64
-        stream = $false
-    } | ConvertTo-Json -Compress
-    try {
-        $null = Invoke-RestMethod -Uri ("http://127.0.0.1:$RouterPort/v1/responses") -Method Post -ContentType "application/json" -Body $probe -TimeoutSec 60
-        Write-Host "Local inference probe completed."
-    } catch {
-        Write-Warning "Router installed, but inference probe failed: $($_.Exception.Message)"
+    if (-not $localEndpointAvailable) {
+        Write-Warning 'Inference probe skipped: the local model endpoint is not ready. Installation is complete.'
+    } elseif ($SkipAutostart) {
+        Write-Warning 'Inference probe skipped: -SkipAutostart did not start this router. Start it manually, then run the diagnostic script.'
+    } else {
+        $probe = @{
+            model = $ModelId
+            input = "Reply exactly LOCAL_MODEL_OK"
+            max_output_tokens = 64
+            stream = $false
+        } | ConvertTo-Json -Compress
+        try {
+            $null = Invoke-RestMethod -Uri ("http://127.0.0.1:$RouterPort/v1/responses") -Method Post -ContentType "application/json" -Body $probe -TimeoutSec 60 -ErrorAction Stop
+            Write-Host "Local inference probe completed."
+        } catch {
+            Write-Warning "Router installed, but the optional inference probe failed: $($_.Exception.Message)"
+        }
     }
 }
 
@@ -348,6 +409,15 @@ Write-Host "Local API:   $LocalBaseUrl"
 Write-Host "Router:      http://127.0.0.1:$RouterPort/v1"
 Write-Host "Backup:      $backupPath"
 Write-Host "Install dir: $InstallDir"
+if ($SkipAutostart) {
+    Write-Host 'Router startup and login autostart were skipped.' -ForegroundColor Yellow
+} else {
+    Write-Host 'Router is running and will start automatically at Windows login.'
+}
+Write-Host 'The model server is managed separately. Start it at the configured Local API before selecting the local model.'
+Write-Host 'No reinstall is needed when that server starts later.'
+Write-Host "Router health: http://127.0.0.1:$RouterPort/health"
+Write-Host "Model readiness (may be 503 until the model is ready): http://127.0.0.1:$RouterPort/ready"
 if (-not $RestartChatGPT) {
     Write-Host "Restart ChatGPT Desktop before using the model picker." -ForegroundColor Yellow
 }

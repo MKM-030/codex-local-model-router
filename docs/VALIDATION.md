@@ -41,3 +41,9 @@ Reference documentation for the underlying contracts: [Codex configuration](http
 ## v0.2.1 display-encoding regression
 
 50 automated tests passed on Windows PowerShell 5.1. Two new tests execute the actual JSON-read statements from the updater, uninstaller and diagnostics against Unicode payloads, with and without a UTF-8 BOM. Before the fix, all five BOM-less read sites failed; after explicit UTF-8 decoding, all passed. The installer lifecycle additionally preserves Unicode labels, descriptions and catalog filenames across two updates, applies an explicit display-name override, and restores the original TOML on uninstall. These are encoding/configuration checks, not new inference benchmarks.
+
+## Fresh installation without a running backend
+
+Validated on Windows PowerShell 5.1 and Python 3.12: all 56 automated regressions passed, including the real PowerShell preflight fixture (40 assertions). The isolated install/reinstall/update/uninstall lifecycle also passed.
+
+`tests/install_without_backend.py` completed installation with a stopped model endpoint, confirmed optional checks were nonfatal and invalid configuration was still rejected, started its own router on a dynamic port, observed `/health` 200 and `/ready` 503, then started a mock backend and observed `/ready` 200 without reinstalling or changing configuration. The test uses a disposable Codex home, no login startup entry, no model weights and no production service ports. It terminates only its own router child.
