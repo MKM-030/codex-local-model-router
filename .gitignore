@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+install-state.json
+router-config.json
+local-model-catalog.json
+*.backup-*
+*.log

@@ -1,0 +1,12 @@
+{
+  "host": "127.0.0.1",
+  "port": 8831,
+  "cloudBase": "https://chatgpt.com/backend-api/codex",
+  "models": [
+    {
+      "id": "Qwen3.8-Flash-Next",
+      "baseUrl": "http://127.0.0.1:8826/v1",
+      "catalogPath": "local-model-catalog.json"
+    }
+  ]
+}

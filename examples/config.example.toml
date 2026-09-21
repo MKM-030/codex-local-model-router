@@ -1,0 +1,13 @@
+model = "gpt-6-astra"
+model_provider = "hybrid_router"
+
+[model_providers.hybrid_router]
+name = "OpenAI + Local Model Router"
+base_url = "http://127.0.0.1:8831/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+supports_standalone_web_search = true
+request_max_retries = 2
+stream_max_retries = 2
+stream_idle_timeout_ms = 600000
