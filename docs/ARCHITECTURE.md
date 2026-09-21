@@ -1,94 +1,45 @@
-# Architecture
+# Architecture: v0.2
 
-## Problem
+The local model produces tool calls; Codex executes them. The router only adapts the wire protocol and routes authorized requests.
 
-Codex Desktop can load custom providers and custom model metadata, but the current Desktop model-selection flow effectively uses one configured provider for the selected model.
+## Request-scoped tool map
 
-That creates a routing conflict:
+Each HTTP request has a new `ToolBridge`. Aliases derive from tool kind, namespace and original name, with a readable prefix and a SHA-256 suffix. Names are bounded to 64 characters; duplicates and collisions reject the request. No process-global tool-call map mixes concurrent sessions.
 
-- OpenAI cloud models need the ChatGPT Codex backend.
-- A local model needs a loopback OpenAI-compatible endpoint.
-- One global provider cannot point to both endpoints.
+Namespaced functions retain their parameter schema. Custom tools become functions with exactly one `input` string. The custom grammar is not enforced by the model endpoint; Codex's existing tool handler receives and validates the restored raw input. A tool that expects a grammar still requires valid model output.
 
-## Bridge design
+Conversation history is adapted on every request, including `custom_tool_call_output`, original namespace fields and call IDs. Return paths translate JSON output arrays and SSE item/argument/completion events. Custom JSON string fragments are buffered to prevent emitting escaped/incomplete input as executable tool text. Tool execution, secrets and approval decisions remain in Codex.
 
-The project configures Codex with one custom provider:
+## Routing boundary
 
-~~~text
-model_provider = "hybrid_router"
-base_url = "http://127.0.0.1:8831/v1"
-~~~
+Raw HTTP framing is validated, then supported content encodings are decoded, then JSON and model IDs are validated. Only exact configured local IDs/aliases are routed locally. Known cloud catalog IDs and explicit cloud-family prefixes are cloud-bound. Unknown/malformed requests never fall back to the cloud.
 
-The router then chooses the real upstream based on the model field in each Responses request.
-## Request routing
+Cloud inference preserves the original request body and tool format. Local inference is adapted to functions. An unavailable local server produces a local transport error, not a cloud retry. Hosted compaction/token routes reject local model IDs.
 
-For configured local model IDs:
+Local upstreams are restricted to loopback. Cloud credential forwarding is pinned to the ChatGPT Codex origin. Local headers use an allowlist; a separate local API key may be provided with `apiKeyEnv`, never by reusing the ChatGPT bearer token. Redirects are not followed.
 
-~~~text
-POST /v1/responses
-model = local-model-id
-    -> local base URL
-~~~
+## Standalone search
 
-For every other model:
+`features.standalone_web_search=true` plus the provider capability exposes `web.run`. The bridge translates that namespace; Codex executes the search and calls `/alpha/search`. This is a separate external service, not local inference.
 
-~~~text
-POST /v1/responses
-model = cloud-model-id
-    -> https://chatgpt.com/backend-api/codex/responses
-~~~
+The router requires `allowCloudSearch=true` and an authorized `searchModel`. When Codex supplies a local model ID on this external endpoint, only that endpoint's model tag is replaced. Codex's search request also includes recent conversation input; this is documented and opt-in. This does not turn cloud search into an offline capability or bypass account authorization.
 
-The same mechanism works for streaming and non-streaming Responses API traffic because the router forwards response bytes incrementally.
+## Skills and hosted tools
 
-## Model catalog
+Local catalogs enable skill, app and plugin usage instructions. This helps the model discover/use available skills; it does not install missing software or prove that the model follows instructions reliably. A skill using an unavailable tool still cannot complete.
 
-Codex requests the provider's model catalog.
+Native hosted `web_search`, file search, image generation, computer execution and dynamic tool-search protocol entries are not arbitrarily converted to invented functions. Unsupported representations fail clearly. Client-executed tools with supported function/custom schemas can cross the bridge, subject to actual client capabilities.
 
-The router forwards that request to the authenticated ChatGPT Codex backend, parses the returned catalog, and appends the local catalog entries from local-model-catalog.json.
+## Operational behavior
 
-This preserves the current cloud-model list while making the local model visible in the same picker.
-## Authentication boundary
+`/health` identifies the running build and PID. Metadata-only rotating logs show route decisions without storing prompts, outputs or credentials. Request cancellation closes the upstream stream. Exclusive Windows binding prevents two router processes from silently sharing the same port. No application bundle is patched and no session database is rewritten.
 
-Codex sends its existing ChatGPT authentication headers to the configured provider.
+## Sources
 
-Cloud-bound requests pass through normally.
+- [Codex configuration reference](https://developers.openai.com/codex/config-reference)
+- [Responses function/custom calling](https://developers.openai.com/api/docs/guides/function-calling)
+- [Codex request compression tests](https://github.com/openai/codex/blob/main/codex-rs/core/tests/suite/request_compression.rs)
+- [Codex standalone search tool](https://github.com/openai/codex/blob/main/codex-rs/ext/web-search/src/tool.rs)
+- [Codex search endpoint](https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/endpoint/search.rs)
 
-Local-bound requests explicitly drop authentication/account headers before leaving the router. The local model server therefore never receives the ChatGPT bearer token or account identifier.
-
-## Why not pretend to be the built-in OpenAI provider?
-
-The implementation tested a provider named OpenAI with a base URL ending in /backend-api/codex so Codex would enable first-party-only code paths.
-
-That changed the request behavior and resulted in Cloudflare 403 responses when those first-party assumptions were proxied through localhost.
-
-The working configuration therefore remains an explicit custom provider.
-
-## Consequence
-
-Some internal Codex features check for the literal built-in provider identity rather than only checking API compatibility. Those features may not enable under hybrid_router.
-
-Normal cloud Responses inference and local Responses inference were both tested successfully.
-## Config writes
-
-Selecting a default model in the Desktop UI invokes Codex config/batchWrite and persists model plus model_reasoning_effort into config.toml.
-
-The local model metadata therefore must advertise reasoning effort values accepted by the model's own chat template.
-
-The original Qwen template accepted:
-
-- low
-- medium
-- xhigh
-
-Advertising minimal caused the local server to return HTTP 500.
-
-## Files installed
-
-The Windows installer places these files in ~/.codex/local-model-router:
-
-- hybrid-model-router.py
-- router-config.json
-- local-model-catalog.json
-- install-state.json
-
-It also adds the hybrid_router provider block to ~/.codex/config.toml and creates a per-user Startup VBS that launches the router with pythonw.exe.
+References describe upstream behavior; compatibility is limited to versions actually tested here.

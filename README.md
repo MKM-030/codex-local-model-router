@@ -1,186 +1,139 @@
 # Codex Local Model Router
 
-Add an OpenAI-compatible **local model** to the ChatGPT/Codex Desktop model picker on Windows while keeping the normal OpenAI cloud models available.
+**Unofficial Windows compatibility bridge for local Responses-API models in the Codex/ChatGPT Desktop Work model picker.** This is not a replacement for the hosted ChatGPT service and does not grant access to additional tools, accounts, or plans.
 
-> **Unofficial workaround.** This project is not an OpenAI product and relies on current Codex Desktop configuration/provider behavior. App updates can change the internals it depends on.
+## Version 0.2: tool compatibility and fail-closed routing
 
-## What this solves
+The router keeps one Codex provider while selecting the actual inference endpoint by model ID. Local inference requests are translated; cloud inference requests retain their original tool protocol.
 
-Codex supports custom model providers, but the Desktop model picker does not currently provide a clean per-model provider selector. If you point the global provider at a local server, cloud models break; if you keep the OpenAI provider, a local model cannot simply use another endpoint.
+```text
+Codex Desktop / CLI
+        |
+  loopback router :8831
+        |
+        +-- configured local model --> tool bridge --> llama-server :8826
+        |
+        +-- known cloud model ---------------------> ChatGPT Codex backend
 
-This project installs a small loopback router that exposes one provider to Codex and routes requests by the selected model:
+Tool calls return to Codex for execution and approval.
+The router does not execute shell commands, patches, MCP tools, or plugins.
+```
 
-~~~text
-ChatGPT / Codex Desktop
-          |
-          v
-127.0.0.1:8831
-Hybrid model router
-     |           |
-     |           +--> OpenAI cloud models -> ChatGPT Codex backend
-     |
-     +--> Local model -> your OpenAI-compatible server
-                         (for example 127.0.0.1:8826/v1)
-~~~
+### Supported local tool shapes
 
-The router also merges the local model metadata into Codex's /models response, so it appears in the normal new-chat model picker.
-## Security behavior
+| Codex representation | Local model sees | Codex receives back |
+| --- | --- | --- |
+| `function` | JSON function | Normal function call |
+| `namespace` containing functions | Stable, collision-checked function aliases | Original namespace and function name |
+| `custom`, including `apply_patch` and freeform tool input | JSON function with one string field, `input` | `custom_tool_call` with the exact raw input |
+| Custom and namespaced tool history | Matching function calls/results | Original Codex representation remains in Codex |
+| Client-executed `web.run` | Namespaced function through the bridge | Codex executes standalone search |
 
-Cloud requests keep the ChatGPT authentication headers Codex already sends.
+Both JSON and SSE responses are supported. Custom-tool JSON argument fragments are buffered until valid, then emitted as raw custom-tool input; normal text and function streaming remains incremental. Skill/app/plugin usage instructions are enabled in local metadata. A model must still select the right tools, follow skills and produce valid arguments.
 
-Before a request is forwarded to a local model server, the router strips these sensitive headers:
+**Not supported:** translating hosted tool implementations such as native `web_search`, `file_search`, hosted code interpreter or image generation into local services. Unsupported tool types and dynamic tool-search history fail explicitly instead of silently disappearing. The bridge does not add vision, bypass approvals, or make every ChatGPT feature available to a local model.
 
-- Authorization
-- chatgpt-account-id
-- Cookie
-- x-openai-actor-authorization
+## Important v0.1 routing fix
 
-The router listens on 127.0.0.1 only by default.
+v0.1 inspected a raw body as JSON and defaulted to the cloud when parsing failed. A compressed local request could therefore reach OpenAI and produce:
+
+```text
+The '<local model>' model is not supported when using Codex with a ChatGPT account.
+```
+
+v0.2 decodes identity, gzip, deflate and Zstandard request bodies, including chunked HTTP framing, **before routing**. Invalid bodies, missing/unknown model IDs, unsupported local endpoints and compression errors are rejected locally. There is no cloud-inference fallback when a local request fails.
 
 ## Requirements
 
-- Windows 11
-- ChatGPT/Codex Desktop
-- Python 3 with pythonw.exe
-- A local server implementing the **OpenAI Responses API**
-  - GET /v1/models
-  - POST /v1/responses
-- The local model must already be loaded/running before installation
+Windows, Python **3.11+**, a compatible Codex Desktop/CLI installation, and an already running local server supporting `GET /v1/models` and `POST /v1/responses`. A chat-completions-only endpoint is insufficient. Runtime dependencies are `httpx` and `zstandard`.
 
-A server that implements only /v1/chat/completions is not sufficient for this setup.
+The original setup used Qwen3.8-Flash-Next via Strix Alloy/llama-server, Windows 11, Desktop 26.915.4065.0 and Codex 0.155.0-alpha.9.2. These are compatibility observations, not a guarantee for other releases. See [validation](docs/VALIDATION.md).
 
-## Quick install: Qwen3.8 Flash Next
+## Upgrade an existing installation
 
-The defaults match the setup this project was originally validated with:
+Download or clone this release, inspect the scripts, then run:
 
-- Model ID: Qwen3.8-Flash-Next
-- Local API: http://127.0.0.1:8826/v1
-- Context: 262144
-- Reasoning: low, medium, xhigh
-- Router: http://127.0.0.1:8831/v1
-Run PowerShell:
+```powershell
+.\Update-CodexToolBridge.ps1
+```
 
-~~~powershell
+The updater recognizes the v0.1 installer layout and the original root-level `~/.codex/hybrid-model-router.py` layout. It backs up existing files, adds the bridge, enables standalone tool mode, refreshes the cache and restarts only router processes belonging to that installation. It does not restart Codex or the model runtime automatically. Restart Codex Desktop after active tasks have finished so running sessions reload tool/feature metadata.
+
+## Fresh installation
+
+From the release checkout:
+
+```powershell
+.\Install-CodexLocalModel.ps1
+```
+
+Defaults are Qwen3.8-Flash-Next, local API `http://127.0.0.1:8826/v1`, router port `8831`, context `262144`, and the tested template's reasoning levels `low`, `medium`, `xhigh`.
+
+Another compatible local model:
+
+```powershell
+.\Install-CodexLocalModel.ps1 -ModelId "my-local-model" -DisplayName "My Local Model" -LocalBaseUrl "http://127.0.0.1:9000/v1" -ContextWindow 131072 -DefaultReasoning low -SupportedReasoning low,medium
+```
+
+Reasoning levels must match your model's chat template. They are not universal. The installer does not download a model or start llama-server.
+
+To fetch the installer without cloning, download the release script, inspect it, and execute it. Supporting files are pinned to the same release tag:
+
+```powershell
 $installer = Join-Path $env:TEMP "Install-CodexLocalModel.ps1"
-Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/MKM-030/codex-local-model-router/main/Install-CodexLocalModel.ps1" -OutFile $installer
-& $installer -RestartChatGPT
-~~~
+Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/MKM-030/codex-local-model-router/v0.2.0/Install-CodexLocalModel.ps1" -OutFile $installer
+# Inspect the downloaded script before executing it.
+& $installer
+```
 
-Or clone the repository and run:
+## Standalone web search is external, not local
 
-~~~powershell
-.\Install-CodexLocalModel.ps1 -RestartChatGPT
-~~~
+The Codex feature `standalone_web_search` exposes the client-executed `web.run` function rather than the incompatible hosted `web_search` tool. Enabling this tool shape does not itself authorize cloud search in the router.
 
-After ChatGPT Desktop restarts, open a new chat and select **Qwen3.8 Flash Next - Local**.
+Search is **opt-in**. It sends search commands **and recent conversation context supplied by Codex** to the ChatGPT Codex search backend and requires valid cloud authorization. A separate authorized cloud model ID is used on this search endpoint, not the local model ID. Local inference is never changed to that cloud model.
 
-## Install another local model
+```powershell
+.\Update-CodexToolBridge.ps1 -AllowCloudSearch -SearchModel "YOUR_AUTHORIZED_CLOUD_MODEL_ID"
+```
 
-~~~powershell
-.\Install-CodexLocalModel.ps1 -ModelId "my-local-model" -DisplayName "My Local Model" -LocalBaseUrl "http://127.0.0.1:9000/v1" -ContextWindow 131072 -DefaultReasoning low -SupportedReasoning low,medium -RestartChatGPT
-~~~
+Fresh installation accepts the same switches. Without opt-in, a search attempt returns a clear error. Search backend availability, account eligibility and future protocol changes can still cause errors; they are not hidden by the bridge.
 
-The model ID must be the same ID your local /v1/responses endpoint accepts.
+## Installed files and rollback
 
-Reasoning levels are model/template-specific. Do not advertise a reasoning effort your local chat template rejects.
-## What the installer changes
+Standard installs use `~/.codex/local-model-router/`, containing the router, `tool_bridge.py`, generated config/catalog, diagnostics, uninstall script and saved rollback state. Legacy upgrades preserve their original location.
 
-The installer:
+The original `config.toml` is backed up. Unrelated projects, plugins, credentials and permission settings are not replaced. The updater records only its added standalone-search setting for reversal. Repeated fresh installs preserve the original provider rollback state.
 
-1. verifies the local /v1/models endpoint;
-2. finds Python and installs httpx if needed;
-3. copies the router to ~/.codex/local-model-router/;
-4. generates router-config.json and local-model-catalog.json;
-5. backs up ~/.codex/config.toml;
-6. preserves your existing Codex config and changes only the active model_provider;
-7. adds the model_providers.hybrid_router provider block;
-8. creates a hidden Windows-login startup entry for the router;
-9. removes models_cache.json so Codex refreshes the catalog;
-10. optionally restarts ChatGPT Desktop.
+```powershell
+& "$HOME\.codex\local-model-router\Uninstall-CodexLocalModel.ps1"
+```
 
-It does **not** replace your MCP, plugin, project, sandbox, or other Codex settings.
-
-The previous top-level model, reasoning setting, provider, and any pre-existing hybrid_router block are recorded in install-state.json for uninstall.
-
-## Uninstall
-
-~~~powershell
-& "$HOME\.codex\local-model-router\Uninstall-CodexLocalModel.ps1" -RestartChatGPT
-~~~
-
-Or, from a cloned repository, run .\Uninstall-CodexLocalModel.ps1.
-
-The uninstaller restores the values saved at install time, removes the router startup entry, clears the model cache, and removes the installed router files.
-
-A fresh backup of the config is created before uninstall as well.
+For a legacy upgrade, use the timestamped updater backup to restore its router/config/catalog and prior startup entry. Do not run the standard uninstaller against the entire `.codex` directory.
 
 ## Diagnostics
 
-~~~powershell
+```powershell
+Invoke-RestMethod http://127.0.0.1:8831/health
+Invoke-RestMethod http://127.0.0.1:8831/ready
 & "$HOME\.codex\local-model-router\scripts\Test-CodexLocalModel.ps1"
-~~~
+```
 
-Run an actual local inference probe too:
+`/health` reports router liveness, version, PID and active inference requests. `/ready` additionally checks each local model endpoint and its advertised model ID; it returns 503 while a required backend is unavailable. Rotating `router-events.jsonl` logs contain routing metadata, encoding, tool count, status and duration, **not prompts, tool arguments, outputs or authentication headers**. Treat local diagnostics as private and review them before sharing.
 
-~~~powershell
-& "$HOME\.codex\local-model-router\scripts\Test-CodexLocalModel.ps1" -RunInferenceProbe
-~~~
+The router binds only to loopback, uses exclusive binding on Windows, strips all non-allowlisted headers for local requests, and never forwards ChatGPT credentials to local inference. Loopback is not a complete isolation boundary: other processes running as you must still be trusted. See [troubleshooting](docs/TROUBLESHOOTING.md).
 
-The diagnostic checks:
+## Tests
 
-- whether config.toml is writable/unlocked;
-- which process owns a lock when possible;
-- whether the router port is listening;
-- whether the local model API is reachable;
-- whether the model is present in Codex's model cache;
-- optionally, whether /v1/responses can complete a local request.
+```powershell
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+python tests\codex_e2e.py --codex "C:\Path\To\codex.exe" --codex-home "$HOME\.codex"
+```
 
-See [Troubleshooting](docs/TROUBLESHOOTING.md) for the issues found during the original implementation.
+The first suite runs protocol, routing, HTTP and configuration regressions without cloud access. The second uses a deterministic mock model with the **real Codex executor** to test custom patches, skill-file reads and a harmless namespaced MCP fixture. It is not a claim about Qwen's tool-selection quality. The fixture uses only disposable files and explicitly grants the existing Windows Codex sandbox group access to those files; it does not change production permissions.
 
-## Tested environment
+## Limitations
 
-Originally validated on **September 21, 2026** with Windows 11, ChatGPT/Codex Desktop 26.915.4065.0, Codex CLI/app-server 0.155.0-alpha.9.2, a local llama-server/Strix Alloy endpoint, and Qwen3.8-Flash-Next with a 262144-token context.
-The following were tested end-to-end:
+This integration relies on undocumented/current Codex provider and catalog behavior. Updates can break it. Some features require the native provider identity and will not work through a custom provider. Tool authentication, approvals, installed plugins, model context limits and tool-selection reliability continue to apply. Large flattened tool catalogs consume context. Use client-side Codex compaction for local sessions: local prompts are not forwarded to hosted compaction endpoints.
 
-- OpenAI cloud inference through the router
-- dynamic OpenAI model-catalog refresh plus local-model merge
-- local Qwen /v1/responses inference through the same provider
-- model selection metadata in the Codex cache
-- Codex config/batchWrite for switching between cloud and local defaults
-- installer and uninstaller against an isolated Codex home
-
-## Known limitation
-
-Because Codex sees hybrid_router as a custom provider, internal features that explicitly require the built-in provider identity openai may not activate even though normal cloud inference works. See [Architecture](docs/ARCHITECTURE.md).
-
-This is a compatibility bridge, not an official plugin API.
-
-## Why low / medium / xhigh?
-
-During the original Qwen setup, Codex initially advertised minimal. The model's Jinja chat template rejected that value and returned HTTP 500:
-
-~~~text
-Unexpected reasoning effort minimal.
-Supported types are xhigh (default), medium, and low.
-~~~
-
-Codex surfaced that server error as the much less useful message "high demand". Advertising only reasoning levels actually accepted by the local model fixed the issue.
-## Repository layout
-
-~~~text
-Install-CodexLocalModel.ps1       Windows installer
-Uninstall-CodexLocalModel.ps1     Safe rollback/uninstaller
-router/hybrid-model-router.py     Request router + catalog merger
-scripts/Test-CodexLocalModel.ps1  Diagnostics
-scripts/Get-FileLockOwner.ps1     Windows Restart Manager lock lookup
-examples/                          Example config/catalog files
-docs/                              Architecture and troubleshooting
-~~~
-
-## Contributing
-
-Issues and PRs are welcome, especially for other Responses-compatible servers, additional model templates, macOS/Linux startup helpers, and ways to reduce reliance on current Codex provider internals.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT license. See [architecture](docs/ARCHITECTURE.md), [changelog](CHANGELOG.md), and [validation](docs/VALIDATION.md).

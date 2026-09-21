@@ -5,3 +5,8 @@ router-config.json
 local-model-catalog.json
 *.backup-*
 *.log
+
+# Disposable validation workspaces (never publish runtime context).
+bridge-live-*/
+codex-bridge-e2e-*/
+router-events.jsonl*

@@ -8,6 +8,10 @@ $ErrorActionPreference = "Continue"
 $ConfigPath = Join-Path $CodexHome "config.toml"
 $InstallDir = Join-Path $CodexHome "local-model-router"
 $RouterConfigPath = Join-Path $InstallDir "router-config.json"
+if (-not (Test-Path $RouterConfigPath) -and (Test-Path (Join-Path $CodexHome "router-config.json"))) {
+    $InstallDir = $CodexHome
+    $RouterConfigPath = Join-Path $CodexHome "router-config.json"
+}
 $CachePath = Join-Path $CodexHome "models_cache.json"
 
 Write-Host "Codex local-model router diagnostics" -ForegroundColor Cyan

@@ -11,12 +11,16 @@ param(
     [string]$CodexHome = (Join-Path $HOME ".codex"),
     [switch]$RestartChatGPT,
     [switch]$RunInferenceProbe,
-    [switch]$SkipAutostart
+    [switch]$SkipAutostart,
+    [switch]$AllowCloudSearch,
+    [string]$SearchModel = "",
+    [string]$SourceRef = "v0.2.0"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$RepoRawBase = "https://raw.githubusercontent.com/MKM-030/codex-local-model-router/main"
+$RepoRawBase = "https://raw.githubusercontent.com/MKM-030/codex-local-model-router/$SourceRef"
+if ($AllowCloudSearch -and [string]::IsNullOrWhiteSpace($SearchModel)) { throw "Supply -SearchModel: cloud web search sends queries and recent context to OpenAI." }
 $InstallDir = Join-Path $CodexHome "local-model-router"
 $ConfigPath = Join-Path $CodexHome "config.toml"
 $RouterScript = Join-Path $InstallDir "hybrid-model-router.py"
@@ -114,11 +118,12 @@ if (-not (Test-Path $PythonwExe)) {
     throw "pythonw.exe was not found next to $PythonExe"
 }
 
-& $PythonExe -c "import httpx" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installing Python dependency: httpx"
-    & $PythonExe -m pip install --user "httpx>=0.27,<1"
-    if ($LASTEXITCODE -ne 0) { throw "Failed to install httpx." }
+& $PythonExe -c "import sys; assert sys.version_info >= (3,11), 'Python 3.11+ required'"
+if ($LASTEXITCODE -ne 0) { throw "Python 3.11+ is required." }
+$missing = & $PythonExe -c "import importlib.util; print(','.join(m for m in ['httpx','zstandard'] if importlib.util.find_spec(m) is None))"
+if (-not [string]::IsNullOrWhiteSpace([string]$missing)) {
+    & $PythonExe -m pip install --user "httpx>=0.27,<1" "zstandard>=0.23,<1"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install router dependencies." }
 }
 
 try {
@@ -143,6 +148,8 @@ function Install-RepoFile([string]$RelativePath, [string]$Destination) {
 }
 
 Install-RepoFile "router/hybrid-model-router.py" $RouterScript
+Install-RepoFile "router/tool_bridge.py" (Join-Path $InstallDir "tool_bridge.py")
+Install-RepoFile "scripts/configure_tool_bridge.py" (Join-Path $InstallDir "scripts\configure_tool_bridge.py")
 Install-RepoFile "Uninstall-CodexLocalModel.ps1" (Join-Path $InstallDir "Uninstall-CodexLocalModel.ps1")
 Install-RepoFile "scripts/Test-CodexLocalModel.ps1" (Join-Path $InstallDir "scripts\Test-CodexLocalModel.ps1")
 Install-RepoFile "scripts/Get-FileLockOwner.ps1" (Join-Path $InstallDir "scripts\Get-FileLockOwner.ps1")
@@ -184,9 +191,9 @@ $catalog = [ordered]@{
             availability_nux = $null
             upgrade = $null
             base_instructions = "You are a capable local coding and work assistant. Follow the user's instructions and use available tools when appropriate."
-            include_skills_usage_instructions = $false
-            include_plugin_usage_instructions = $false
-            include_apps_usage_instructions = $false
+            include_skills_usage_instructions = $true
+            include_plugin_usage_instructions = $true
+            include_apps_usage_instructions = $true
             supports_reasoning_summary_parameter = $false
             default_reasoning_summary = "none"
             support_verbosity = $false
@@ -215,6 +222,9 @@ $routerConfig = [ordered]@{
     host = "127.0.0.1"
     port = $RouterPort
     cloudBase = "https://chatgpt.com/backend-api/codex"
+    allowCloudSearch = [bool]$AllowCloudSearch
+    searchModel = $SearchModel
+    logMetadata = $true
     models = @(
         [ordered]@{
             id = $ModelId
@@ -247,7 +257,9 @@ $state = [ordered]@{
     modelId = $ModelId
     routerPort = $RouterPort
 }
-$state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $StatePath -Encoding UTF8
+if (-not (Test-Path -LiteralPath $StatePath)) {
+    $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $StatePath -Encoding UTF8
+}
 
 $configText = Set-TopLevelRawValue $configText "model_provider" '"hybrid_router"'
 
@@ -265,6 +277,8 @@ stream_idle_timeout_ms = 600000
 "@
 $configText = Set-SectionBlock $configText "model_providers.hybrid_router" $providerBlock
 Write-Utf8Atomic $ConfigPath $configText
+& $PythonExe (Join-Path $InstallDir "scripts\configure_tool_bridge.py") --config $ConfigPath --state (Join-Path $InstallDir "tool-bridge-state.json")
+if ($LASTEXITCODE -ne 0) { throw "Could not enable standalone tool mode; restore the config backup before retrying." }
 
 $startupDir = [Environment]::GetFolderPath("Startup")
 $startupVbs = Join-Path $startupDir "Codex-Local-Model-Router.vbs"
@@ -283,7 +297,7 @@ Set shell = Nothing
 
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.Name -eq "pythonw.exe" -and
+            $_.Name -in @("pythonw.exe","python.exe") -and
             $_.CommandLine -like "*$RouterScript*"
         } |
         ForEach-Object {
@@ -292,6 +306,8 @@ Set shell = Nothing
 
     Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList ('"' + $startupVbs + '"')
     Start-Sleep -Milliseconds 800
+    $health = Invoke-RestMethod -Uri ("http://127.0.0.1:$RouterPort/health") -TimeoutSec 5
+    if ($health.version -ne "0.2.0") { throw "Unexpected router version on target port." }
 }
 
 $cache = Join-Path $CodexHome "models_cache.json"

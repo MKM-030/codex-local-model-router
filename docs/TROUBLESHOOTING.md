@@ -102,3 +102,23 @@ If you started additional copies manually, close them before troubleshooting.
 Every install creates a timestamped config.toml backup.
 
 The safe first option is the included uninstaller. If the install state is damaged, close ChatGPT Desktop, make a copy of your current config, and restore the timestamped backup manually.
+
+## v0.2: connection refused / 502 / local_backend_unavailable
+
+A 502 response whose message contains a router `ConnectError` means the router answered, but could not connect to its upstream. Seeing `:8831/v1/responses` in the client error does not prove that the router port itself was refused.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8831/health
+Invoke-RestMethod http://127.0.0.1:8831/ready
+Invoke-RestMethod http://127.0.0.1:8826/health
+```
+
+`/health` checks the router; `/ready` checks configured local upstreams. Start the local model on the exact port configured in `router-config.json`. v0.2 reports 503 `local_backend_unavailable` for connection failure and 504 `local_backend_timeout` for timeouts. It does not switch local inference to the cloud. The generic installer does not launch or download your inference runtime.
+
+## v0.2: local model is not supported with a ChatGPT account
+
+v0.1 could mistake a compressed request for an unrecognized body and send it to the cloud. v0.2 decodes the body before inspecting the model and rejects parsing errors, missing model IDs and unknown IDs. A real Zstandard-compressed Qwen request was verified to complete locally.
+
+Standalone search is different: it is a cloud service. Its request must use the separately configured, authorized `searchModel`, not the local Qwen model ID. This mapping applies only to the search endpoint; normal local inference stays local. Cloud account eligibility is still enforced by the service.
+
+If the error persists after upgrading, check the metadata log's `path`, `route`, `model` and `errorCode`. Also confirm that an old thread selects `hybrid_router`, not the built-in cloud provider. Restart Codex Desktop after active work has finished to reload feature/tool metadata. Do not delete a thread's history or edit its database as a troubleshooting shortcut.

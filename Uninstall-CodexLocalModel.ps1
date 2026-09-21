@@ -86,17 +86,28 @@ try {
     throw "Could not restore $ConfigPath. It may be locked. Original error: $($_.Exception.Message)"
 }
 
+$bridgeState = Join-Path $InstallDir "tool-bridge-state.json"
+if (Test-Path -LiteralPath $bridgeState) {
+    & python (Join-Path $InstallDir "scripts\configure_tool_bridge.py") --config $ConfigPath --state $bridgeState --restore
+    if ($LASTEXITCODE -ne 0) { throw "Failed to restore standalone-search setting; backup retained." }
+}
+
 $routerScript = Join-Path $InstallDir "hybrid-model-router.py"
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object {
-        $_.Name -eq "pythonw.exe" -and
+        $_.Name -in @("pythonw.exe","python.exe") -and
         $_.CommandLine -like "*$routerScript*"
     } |
     ForEach-Object {
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
     }
 $startupVbs = Join-Path ([Environment]::GetFolderPath("Startup")) "Codex-Local-Model-Router.vbs"
-Remove-Item -LiteralPath $startupVbs -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $startupVbs) {
+    $startupText = [IO.File]::ReadAllText($startupVbs)
+    if ($startupText.IndexOf($routerScript,[StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        Remove-Item -LiteralPath $startupVbs -Force
+    }
+}
 Remove-Item -LiteralPath (Join-Path $CodexHome "models_cache.json") -Force -ErrorAction SilentlyContinue
 
 if (-not $KeepRouterFiles) {
